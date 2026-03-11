@@ -2,3 +2,21 @@
 data/*
 
 .idea/
+
+venv/
+
+__pycache__/
+*.py[cod]
+.env
+*.log
+.DS_Store
+Thumbs.db
+results/
+outputs/
+models/
+*.pkl
+*.h5
+*.npy
+*.pt
+*.ckpt
+.vscode/
