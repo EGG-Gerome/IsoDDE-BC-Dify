@@ -1,6 +1,4 @@
-import requests 
 import pandas as pd 
-import time 
 import os 
 import logging
 
@@ -13,55 +11,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 # =================== 
 
-CIVIC_API_URL = "https://civicdb.org/api/graphql"
-QUERY_TEMPLATE = """
-query VariantQuery($gene: String!, $variant: String!) {
-    variants(gene: $gene, variantName: $variant) {
-        edges {
-            node {
-                id
-                name
-                variantAliases
-                assertions {
-                    clinicalSignificance
-                    evidenceLevels
-                    assertionType
-                    therapies {
-                        name
-                    }
-                }
-            }
-        }
-    }
-}
-"""
-
 def get_data_dir():
     """返回数据目录的绝对路径"""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.abspath(os.path.join(script_dir, DATA_REL_PATH))
     return data_dir
-
-def query_civic_variant(gene, variant):
-    """查询 CIViC 数据库"""
-    variables = {"gene": gene, "variant": variant}
-    try:
-        response = requests.post(
-            CIVIC_API_URL,
-            json={"query": QUERY_TEMPLATE, "variables": variables},
-            timeout=30
-        )
-        if response.status_code != 200:
-            logger.error(f"API 返回状态码异常：{response.status_code}")
-            return None
-        result = response.json()
-        if 'errors' in result:
-            logger.error(f"API 返回错误：{result['errors']}")
-            return None
-        return result
-    except requests.exceptions.RequestException as e:
-        logger.error(f"网络请求失败：{e}")
-        return None
 
 def annotate_maf_file(input_maf, output_maf):
     """批量注释 MAF 文件"""
@@ -69,7 +23,52 @@ def annotate_maf_file(input_maf, output_maf):
         logger.error(f"文件不存在：{input_maf}")
         return
 
+    data_dir = get_data_dir()
+    
+    # 读取CIViC数据文件
+    variant_file = os.path.join(data_dir, 'nightly-VariantSummaries.tsv')
+    assertion_file = os.path.join(data_dir, 'nightly-AcceptedAssertionSummaries.tsv')
+    
+    if not os.path.exists(variant_file) or not os.path.exists(assertion_file):
+        logger.error("CIViC数据文件不存在，请先下载nightly-VariantSummaries.tsv和nightly-AcceptedAssertionSummaries.tsv文件")
+        return
+    
     try:
+        # 读取CIViC数据文件（使用更直接的方式）
+        logger.info("读取CIViC数据文件...")
+        
+        # 读取Variants文件
+        variants = []
+        try:
+            with open(variant_file, 'r') as f:
+                header = f.readline().strip().split('\t')
+                for line in f:
+                    fields = line.strip().split('\t')
+                    # 即使字段数量不足，也尝试创建字典
+                    variant_dict = {}
+                    for i, field in enumerate(fields):
+                        if i < len(header):
+                            variant_dict[header[i]] = field
+                    # 只有当至少有基本字段时才添加
+                    if 'feature_name' in variant_dict and 'variant' in variant_dict:
+                        variants.append(variant_dict)
+        except Exception as e:
+            logger.error(f"读取Variants文件失败: {e}")
+        
+        # 读取Assertions文件
+        assertions = []
+        with open(assertion_file, 'r') as f:
+            header = f.readline().strip().split('\t')
+            for line in f:
+                fields = line.strip().split('\t')
+                if len(fields) >= len(header):
+                    assertions.append(dict(zip(header, fields)))
+        
+        logger.info(f"Variants文件行数: {len(variants)}")
+        logger.info(f"Assertions文件行数: {len(assertions)}")
+        
+        # 读取MAF文件
+        logger.info("读取MAF文件...")
         maf_df = pd.read_csv(input_maf, sep='\t')
     except Exception as e:
         logger.error(f"读取文件失败：{e}")
@@ -97,43 +96,59 @@ def annotate_maf_file(input_maf, output_maf):
             logger.warning(f"跳过第 {idx+1} 行：无有效突变或基因名")
             continue
 
-        result = query_civic_variant(gene, variant)
-        if not result:
-            logger.warning(f"查询失败：{gene} {variant}")
-            continue
-
-        variants = result.get('data', {}).get('variants', {}).get('edges', [])
-        if not variants:
-            logger.info(f"无结果：{gene} {variant}")
-            continue
-
-        variant_info = variants[0]['node']
         evidence = []
         clinical = []
         drug = []
 
-        for assertion in variant_info.get('assertions', []):
-            # 证据等级
-            ev = assertion.get('evidenceLevels')
-            if ev:
-                if isinstance(ev, list):
-                    evidence.extend(ev)
-                else:
-                    evidence.append(ev)
-            # 临床意义
-            cs = assertion.get('clinicalSignificance')
-            if cs:
-                if isinstance(cs, list):
-                    clinical.extend(cs)
-                else:
-                    clinical.append(cs)
-            # 药物关联
-            therapies = assertion.get('therapies', [])
-            for therapy in therapies:
-                drug_name = therapy.get('name')
-                if drug_name:
-                    drug.append(drug_name)
-
+        # 先在Variants文件中查找匹配的基因和变体
+        variant_match = None
+        found = False
+        
+        # 直接遍历variants列表
+        for var in variants:
+            # 检查feature_name列（可能包含基因符号）
+            if 'feature_name' in var:
+                feature_name = var['feature_name']
+                if feature_name.lower() == gene.lower():
+                    # 检查变体是否匹配
+                    if 'variant' in var:
+                        var_variant = var['variant']
+                        if (var_variant == variant or 
+                            var_variant.lower() == variant.lower() or 
+                            variant.lower() in var_variant.lower()):
+                            variant_match = var
+                            logger.info(f"找到匹配的变体：{feature_name} {var_variant}")
+                            found = True
+                            break
+                        # 检查别名是否匹配
+                        if 'variant_aliases' in var and var['variant_aliases']:
+                            if variant.lower() in var['variant_aliases'].lower():
+                                variant_match = var
+                                logger.info(f"在别名中找到匹配：{feature_name} {var_variant} (别名: {var['variant_aliases']})")
+                                found = True
+                                break
+        
+        if not found:
+            logger.info(f"无结果：{gene} {variant}")
+        
+        if variant_match is not None:
+            # 在Assertions文件中查找相关的断言
+            for assertion in assertions:
+                if 'molecular_profile' in assertion:
+                    molecular_profile = assertion['molecular_profile']
+                    # 检查molecular_profile是否包含基因信息
+                    if gene.lower() in molecular_profile.lower():
+                        # 提取证据等级（从amp_category字段）
+                        if 'amp_category' in assertion and assertion['amp_category']:
+                            evidence.append(assertion['amp_category'])
+                        # 提取临床意义
+                        if 'significance' in assertion and assertion['significance']:
+                            clinical.append(assertion['significance'])
+                        # 提取药物关联
+                        if 'therapies' in assertion and assertion['therapies']:
+                            drug.extend([t.strip() for t in assertion['therapies'].split(',')])
+        
+        # 去重并保存结果
         maf_df.at[idx, 'CIViC_Evidence_Level'] = '; '.join(set(evidence))
         maf_df.at[idx, 'CIViC_Clinical_Significance'] = '; '.join(set(clinical))
         maf_df.at[idx, 'CIViC_Drug_Associations'] = '; '.join(set(drug))
@@ -144,8 +159,6 @@ def annotate_maf_file(input_maf, output_maf):
         if (idx + 1) % 10 == 0:
             maf_df.to_csv(output_maf, sep='\t', index=False)
             logger.info(f'已保存进度：{idx+1}/{total_rows}')
-
-        time.sleep(1)  # 避免 API 速率限制
 
     maf_df.to_csv(output_maf, sep='\t', index=False)
     logger.info(f"完成，结果保存至 {output_maf}")
