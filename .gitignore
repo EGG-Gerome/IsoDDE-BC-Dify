@@ -1,5 +1,6 @@
-# 保留目录结构但忽略内容
+# 保留目录结构但忽略数据内容（README 除外）
 data/*
+!data/README.md
 
 .idea/
 

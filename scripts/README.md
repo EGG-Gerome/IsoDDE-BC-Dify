@@ -1,66 +1,44 @@
-# CIViC 批量注释脚本
+# scripts/ 目录说明
 
-## 功能
+本目录包含便捷脚本，它们是对 `src/isodde_bc_dify/` 包的薄 wrapper。
 
-本脚本用于使用本地 CIViC TSV 文件批量注释 MAF 文件，添加以下注释列：
-- `CIViC_Evidence_Level`：证据等级
-- `CIViC_Clinical_Significance`：临床意义
-- `CIViC_Drug_Associations`：药物关联
+## civic_annotator.py
 
-## 依赖
+使用 CIViC 数据对 MAF 文件进行批量注释。
 
-- Python 3.12+
-- pandas
-
-## 安装依赖
+### 快速运行（使用默认参数）
 
 ```bash
-pip install pandas
+# 无参数时自动注释 data/cohortMAF.2026-03-10.maf → data/annotated_brca_maf.tsv
+python scripts/civic_annotator.py
 ```
 
-## 使用方法
-
-1. 确保 `data` 目录存在于脚本所在目录的上级目录
-2. 下载 CIViC 数据文件并放入 `data` 目录：
-   - `Variants.tsv`：变体信息
-   - `Accepted_AID.tsv`：断言信息
-3. 将 MAF 文件命名为 `tcga_brca_maf.txt` 并放入 `data` 目录
-4. 运行脚本：
+### 自定义参数
 
 ```bash
-python civic_annotator.py
+python scripts/civic_annotator.py civic-annotate \
+    --input-maf data/cohortMAF.2026-03-10.maf \
+    --output-maf data/annotated_brca_maf.tsv \
+    --data-dir data \
+    --backend tsv
 ```
 
-5. 注释结果将保存为 `data/annotated_brca_maf.txt`
+### 前置条件
 
-## 配置
+1. `data/` 目录下需要以下文件：
+   - `nightly-VariantSummaries.tsv` —— CIViC 变体汇总（从 [CIViC Nightly](https://civicdb.org/downloads/nightly/) 下载）
+   - `nightly-AcceptedAssertionSummaries.tsv` —— CIViC 已接受断言汇总（同上）
+   - MAF 文件（需包含 `Hugo_Symbol` 和 `HGVSp_Short` 列）
 
-- `DATA_REL_PATH`：数据目录相对于当前脚本的路径，默认为 `../data`
-- 脚本会自动创建数据目录（如果不存在）
+2. 安装依赖：`pip install -e .` 或 `pip install pandas requests`
 
-## 注意事项
+### 输出
 
-1. 脚本使用本地文件进行匹配，不需要网络连接
-2. 脚本会每 10 条记录保存一次进度，以防止意外中断导致数据丢失
-3. 请确保 MAF 文件包含 `Hugo_Symbol` 和 `HGVSp_Short` 列
-4. 对于无效的基因名或突变信息，脚本会跳过并记录警告
-5. 请确保 CIViC 数据文件包含以下列：
-   - `gene`：基因符号
-   - `variant_name`：变体名称
-   - `variant_id`：变体 ID（用于关联两个文件）
-   - `evidence_level`：证据等级
-   - `clinical_significance`：临床意义
-   - `therapies`：药物关联（可选）
+在原始 MAF 列基础上追加 CIViC 注释列，详见根目录 [README.md](../README.md)。
 
-## 输入文件格式
+### 注释后端
 
-输入文件应为标准 MAF 格式，使用制表符分隔，包含以下列：
-- `Hugo_Symbol`：基因符号
-- `HGVSp_Short`：蛋白质改变的简短表示（如 p.V600E）
+- **TSV**（默认）：使用本地 CIViC nightly dump 离线注释，无需网络
+- **GraphQL**：实时查询 CIViC API，`--backend graphql --sleep-seconds 1.0`
 
-## 输出文件
-
-输出文件在输入文件的基础上添加了三列注释信息：
-- `CIViC_Evidence_Level`：来自 CIViC 的证据等级
-- `CIViC_Clinical_Significance`：来自 CIViC 的临床意义
-- `CIViC_Drug_Associations`：来自 CIViC 的药物关联
+完整参数说明：`python scripts/civic_annotator.py civic-annotate --help`
